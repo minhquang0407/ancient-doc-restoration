@@ -1,4 +1,4 @@
-# 📜 Ancient Document Restoration & Digitization System (S-Tier Project)
+# 📜 Ancient Document Restoration & Digitization System 
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -41,3 +41,4 @@ venv\Scripts\activate     # Windows
 
 # Cài đặt thư viện phụ thuộc
 pip install -r requirements.txt
+
