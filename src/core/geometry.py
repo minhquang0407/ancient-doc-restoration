@@ -16,7 +16,9 @@ class GeometryCorrector:
         M = cv2.getRotationMatrix2D(center, angle, 1.0)
 
         # 2. Thực hiện biến đổi Affine
-        rotated = cv2.warpAffine(image, M, (w, h))
+        rotated = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC,
+                         borderMode=cv2.BORDER_CONSTANT,
+                         borderValue=(255, 255, 255))
         return rotated
 
     def _order_points(self, pts):
