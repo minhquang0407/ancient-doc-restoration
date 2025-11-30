@@ -5,17 +5,18 @@ class Preprocessor:
     def __init__(self):
         pass
 
-    def to_grayscale(self, image:np.ndarray, assume_rgb=False) -> np.ndarray:
+    def to_grayscale(self, image:np.ndarray, assume_rgb:bool=False) -> np.ndarray:
         """
         Chuyển ảnh sang thang xám chuẩn (Luma coding).
         Công thức: Y = 0.299R + 0.587G + 0.114B
         """
         if image is None:
             raise ValueError("Input image is None!")
-        
         if not isinstance(image, np.ndarray):
-            raise TypeError("Input image must be a numpy ndarray!")
-        
+            raise TypeError("Input image must be a np.ndarray!")
+        if not isinstance(assume_rgb, bool):
+            raise TypeError("assume_rgb must be a boolean value!")
+
         if image.ndim == 2:
             return image
         
@@ -33,7 +34,7 @@ class Preprocessor:
             conversion_code = cv.COLOR_RGB2GRAY if assume_rgb else cv.COLOR_BGR2GRAY
             return cv.cvtColor(image, conversion_code)
         
-        raise ValueError("Input image has unsupported number of channels!")
+        raise ValueError(f"Unsupported number of channels: {image.shape[2] if image.ndim == 3 else 'ndim=' + str(image.ndim)}")
 
 
     def resize_image(self, image:np.ndarray, 
@@ -45,7 +46,6 @@ class Preprocessor:
         """
         if image is None:
             raise ValueError("Input image is None!")
-        
         if not isinstance(image, np.ndarray):
             raise TypeError("Input image must be a numpy ndarray!")
         
@@ -62,22 +62,28 @@ class Preprocessor:
                                           or target_height <= 0):
             raise ValueError("target_height must be a positive integer or None")
         
-        # Tính target dims giữ tỷ lệ
+        # nếu chỉ truyền width -> giữ tỷ lệ theo width
         if target_width is not None and target_height is not None:
             ratio = target_width / float(w)
             new_w = target_width
             new_h = max(1, int(round(h * ratio)))
+        # nếu chỉ truyền height -> giữ tỷ lệ theo height
         elif target_height is not None and target_width is None:
             ratio = target_height / float(h)
             new_h = target_height
             new_w = max(1, int(round(w * ratio)))
         else:
-            # Cả hai được truyền -> không giữ tỷ lệ -> resize trực tiếp
+            # Cả hai chiều được truyền -> resize trực tiếp
             new_w, new_h = target_width, target_height
-            # để lựa chọn nội suy, tính ratio bằng chiều lớn hơn so với width
-            ratio = (target_width / float(w) + target_height / float(h)) / 2.0 
-
-        # Quy tắc: INTER_AREA khi ratio < 1 (thu nhỏ), INTER_CUBIC khi ratio > 1 (phóng to)
+            # Tính ratio_w và ratio_h riêng, chọn ratio tổng quát để chọn nội suy:
+            ratio_w = target_width / float(w)
+            ratio_h = target_height / float(h)
+            # Chọn ratio tổng quát để quyết interpolation:
+            # nếu một chiều phóng to thì coi là phóng to -> dùng INTER_CUBIC
+            # nếu cả hai < 1 -> thu nhỏ -> INTER_AREA
+            ratio = max(ratio_w, ratio_h)
+ 
+        # Quy tắc: INTER_AREA khi ratio < 1 (thu nhỏ), còn lại INTER_CUBIC
         inter = cv.INTER_AREA if ratio < 1.0 else cv.INTER_CUBIC
 
         return cv.resize(image, (int(new_w), int(new_h)), interpolation=inter)
@@ -93,7 +99,6 @@ class Preprocessor:
 
         if image is None:
             raise ValueError("Input image is None!")
-        
         if not isinstance(image, np.ndarray):
             raise TypeError("Input image must be a numpy ndarray!")
         
@@ -116,14 +121,17 @@ class Preprocessor:
             image = np.clip(image, 0, 255).astype(np.uint8)
 
         # calcHist chấp nhận mask; mask phải là uint8, cùng kích thước HxW, giá trị 0 hoặc 255
+        mask_proc = None
         if mask is not None:
             if not isinstance(mask, np.ndarray):
                 raise TypeError("Mask must be a numpy ndarray or None!")
             if mask.dtype != np.uint8:
                 # Chuẩn hóa về 0/255 uint8
-                mask = (mask > 0).astype(np.uint8) * 255
-            if mask.shape != image.shape[:2]:
+                mask_proc = (mask > 0).astype(np.uint8) * 255
+            else:
+                mask_proc = mask
+            if mask_proc.shape != image.shape[:2]:
                 raise ValueError("Mask must have same HxW as image!")
             
-        hist = cv.calcHist([image], [0], mask, [256], [0, 256]).flatten()
+        hist = cv.calcHist([image], [0], mask_proc, [256], [0, 256]).flatten()
         return hist
