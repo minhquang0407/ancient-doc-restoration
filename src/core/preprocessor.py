@@ -62,11 +62,12 @@ class Preprocessor:
                                           or target_height <= 0):
             raise ValueError("target_height must be a positive integer or None")
         
-        # Tính target dims giữ tỷ lệ
+        # Nếu chỉ truyền width -> giữ tỷ lệ theo width
         if target_width is not None and target_height is not None:
             ratio = target_width / float(w)
             new_w = target_width
             new_h = max(1, int(round(h * ratio)))
+        # Nếu chỉ truyền height -> giữ tỷ lệ theo height
         elif target_height is not None and target_width is None:
             ratio = target_height / float(h)
             new_h = target_height
@@ -77,8 +78,9 @@ class Preprocessor:
             # Tính ratio_w và ratio_h riêng, chọn ratio tổng quát để chọn nội suy:
             ratio_w = target_width / float(w)
             ratio_h = target_height / float(h)
-            # dùng max để nếu có chiều phóng to thì coi như phóng to (chọn INTER_CUBIC),
-            # nếu cả hai đều < 1 thì sẽ chọn INTER_AREA.
+            # Chọn ratio tổng quát để quyết interpolation:
+            # nếu một chiều phóng to thì coi là phóng to -> dùng INTER_CUBIC
+            # nếu cả hai < 1 -> thu nhỏ -> INTER_AREA
             ratio = max(ratio_w, ratio_h)
  
         # Quy tắc: INTER_AREA khi ratio < 1 (thu nhỏ), còn lại INTER_CUBIC
