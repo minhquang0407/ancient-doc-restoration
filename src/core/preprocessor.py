@@ -62,12 +62,12 @@ class Preprocessor:
                                           or target_height <= 0):
             raise ValueError("target_height must be a positive integer or None")
         
-        # nếu chỉ truyền width -> giữ tỷ lệ theo width
-        if target_width is not None and target_height is not None:
+        # Nếu chỉ truyền width -> giữ tỷ lệ theo width
+        if target_width is not None and target_height is None:
             ratio = target_width / float(w)
             new_w = target_width
             new_h = max(1, int(round(h * ratio)))
-        # nếu chỉ truyền height -> giữ tỷ lệ theo height
+        # Nếu chỉ truyền height -> giữ tỷ lệ theo height
         elif target_height is not None and target_width is None:
             ratio = target_height / float(h)
             new_h = target_height
