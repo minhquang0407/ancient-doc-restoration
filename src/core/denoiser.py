@@ -88,4 +88,64 @@ class ImageDenoiser:
         Vá lỗ thủng/vết rách.
         Dùng cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
         """
-        pass
+
+    def clean_binary_noise(self, mask: np.ndarray, min_area: int = 20) -> np.ndarray:
+        """
+        Dọn rác nhiễu (mực thấm, đốm bẩn) dựa trên diện tích.
+        """
+        if mask is None: return None
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        clean_mask = np.zeros_like(mask)
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area:
+                clean_mask[labels == i] = 255
+        return clean_mask
+
+    def morphology_inpaint(self, mask: np.ndarray, close_iter: int = 2) -> np.ndarray:
+        """
+        Tách chữ ra trước -> Vá lỗ mạnh tay -> Trả lại độ dày.
+        """
+        # Kernel cơ bản 3x3
+        kernel = np.ones((3, 3), np.uint8)
+
+        # 1: ERODE (Co chữ lại)
+        eroded = cv2.erode(mask, kernel, iterations=1)
+
+        # 2: CLOSE (Vá lỗ mạnh tay)
+        restored = cv2.morphologyEx(eroded, cv2.MORPH_CLOSE, kernel, iterations=close_iter)
+
+        # 3: DILATE (Phình ra lại)
+        final_result = cv2.dilate(restored, kernel, iterations=1)
+
+        # 4: OPEN (Dọn gai lần cuối)
+        final_result = cv2.morphologyEx(final_result, cv2.MORPH_OPEN, kernel, iterations=1)
+
+        return final_result
+
+    def remove_bleed_through(mask: np.ndarray, min_area: int = 10) -> np.ndarray:
+        """
+        Khử nhiễu thấm và rác dựa trên diện tích (CC Analysis).
+
+        Input: mask (Ảnh nhị phân: Mực=255, Nền=0)
+        min_area: Ngưỡng diện tích. Những vết nhỏ hơn số pixel này sẽ bị xóa.
+        """
+        if mask is None: return None
+
+        # 1. Tìm tất cả các vùng liên thông (Connected Components)
+        # num_labels: Số lượng vùng tìm thấy
+        # labels: Bản đồ nhãn
+        # stats: Thông tin [x, y, width, height, AREA] của từng vùng
+        # centroids: Tâm của từng vùng
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+
+        # Tạo mask kết quả sạch sẽ
+        clean_mask = np.zeros_like(mask)
+
+        # 2. Duyệt qua từng vùng (Bỏ qua nhãn 0 là background)
+        for i in range(1, num_labels):
+            area = stats[i, cv2.CC_STAT_AREA]
+
+            # 3. Logic: Chỉ giữ lại những vùng đủ lớn (là nét chữ)
+            # Vết thấm/Nhiễu thường là các đốm nhỏ rời rạc
+            if area >= min_area:
+                clean_mask[labels == i] = 255
