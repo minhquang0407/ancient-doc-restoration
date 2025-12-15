@@ -116,7 +116,7 @@ class ImageEnhancer:
         # 2. Tính Mask (phần chi tiết biên): Mask = Input - Blurred
         mask = float_image - blurred
 
-        # 3. Áp dụng ngưỡng (threshold) để chỉ làm nét các cạnh rõ ràng (tùy chọn)
+        # 3. Áp dụng ngưỡng (threshold) để chỉ làm nét các cạnh rõ ràng
         if threshold > 0:
             mask[np.abs(mask) < threshold] = 0
 
