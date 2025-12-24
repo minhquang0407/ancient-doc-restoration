@@ -123,7 +123,7 @@ class PageDewarper:
         # Dùng Otsu để tự động tìm ngưỡng tối ưu tách nền/chữ
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # B2: Lấy các dòng văn bản (Text Line Detection) [cite: 119]
+        # B2: Lấy các dòng văn bản (Text Line Detection)
         contours = self.get_text_lines(binary)
 
         if not contours:
@@ -141,7 +141,7 @@ class PageDewarper:
         top_points = top_cnt.reshape(-1, 2)
         bottom_points = bottom_cnt.reshape(-1, 2)
 
-        # B4: Mô hình hóa đường cong (Polynomial Regression) [cite: 104]
+        # B4: Mô hình hóa đường cong (Polynomial Regression)
         top_poly = self.fit_polynomial(top_points)
         bottom_poly = self.fit_polynomial(bottom_points)
 
