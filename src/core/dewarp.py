@@ -16,43 +16,35 @@ class PageDewarper:
         """
         pass
 
-    def generate_mesh(self, image_shape, top_curve, bottom_curve):
+    def generate_mesh(self, image_shape, top_curve, bottom_curve, output_size=None):
         """
         Tạo lưới tọa độ nguồn (Source Mesh) dựa trên đa thức đường cong trên và dưới.
         Dùng cho cv2.remap để làm phẳng trang cong.
         """
-        height, width = image_shape[:2]
+        if output_size is not None:
+            out_h, out_w = output_size
+        else:
+            out_h, out_w = image_shape[:2]
+
+        src_h, src_w = image_shape[:2]
 
         # Tạo trục tọa độ
-        x_range = np.arange(width, dtype=np.float32)
-        y_range = np.arange(height, dtype=np.float32)
+        x_range = np.linspace(0, src_w - 1, num=out_w, dtype=np.float32)
+        y_ratio = np.linspace(0, 1, num=out_h, dtype=np.float32).reshape(-1, 1)
 
         # Tính y của đường cong trên & dưới
-        top_y = np.polyval(top_curve, x_range)
-        bottom_y = np.polyval(bottom_curve, x_range)
-
-        # Giới hạn biên an toàn
-        top_y = np.clip(top_y, 0, height - 1)
-        bottom_y = np.clip(bottom_y, 0, height - 1)
+        top_y = np.clip(np.polyval(top_curve, x_range), 0, src_h - 1)
+        bottom_y = np.clip(np.polyval(bottom_curve, x_range), 0, src_h - 1)
 
         # Đảm bảo bottom luôn dưới top
         bottom_y = np.maximum(bottom_y, top_y + 1)
 
-        # Lưới tọa độ
-        target_x, target_y = np.meshgrid(x_range, y_range)
-
-        # Chuẩn hóa chiều cao
-        relative_height = target_y / max(height - 1, 1)
-
-        # Nội suy tuyến tính theo chiều dọc
-        top_y_row = top_y.reshape(1, -1)
-        bottom_y_row = bottom_y.reshape(1, -1)
-
         # Công thức: source_y = top + tỷ lệ * khoảng cách
-        source_y = top_y_row + relative_height*(bottom_y_row - top_y_row)
+        # (H, 1) x (1, W) -> (H, W)
+        source_y = top_y + y_ratio*(bottom_y - top_y)
 
-        # Xử lý source_x
-        source_x = target_x
+        # Broadcast x_range thành mảng 2D
+        source_x = np.broadcast_to(x_range, (out_h, out_w))
 
         return source_x.astype(np.float32), source_y.astype(np.float32)
 
