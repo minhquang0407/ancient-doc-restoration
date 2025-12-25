@@ -135,3 +135,74 @@ class Preprocessor:
             
         hist = cv.calcHist([image], [0], mask_proc, [256], [0, 256]).flatten()
         return hist
+
+    def filter_small_blobs(self, image: np.ndarray, min_area: int=30,
+                           min_height: int=8, max_aspect_ratio: float=8.0,
+                           min_fill_ratio: float=0.2) -> np.ndarray:
+        """
+        Lọc nhiễu vụn vặt bằng Connected Component Analysis
+    
+        image : np.ndarray
+            Ảnh đầu vào (binary hoặc grayscale).
+        min_area : int
+            Diện tích tối thiểu của blob để được giữ lại.
+        min_height : int
+            Chiều cao tối thiểu của blob (quan trọng cho phát hiện dòng).
+        max_aspect_ratio : float
+            Tỷ lệ w/h tối đa cho phép (loại nét quá dài).
+        min_fill_ratio : float
+            Mức độ "đặc" của blob: area / (w*h).
+
+        Returns
+        -------
+        np.ndarray
+            Ảnh nhị phân đã lọc nhiễu.
+        """
+        if image is None: 
+            raise ValueError("Input image is None!")
+        
+        if image.ndim > 2:
+            image = self.to_grayscale(image)
+
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
+
+        unique_vals = np.unique(image)
+        is_binary = np.all(np.isin(unique_vals, [0, 255]))
+
+        if not is_binary:
+            _, binary_img = cv.threshold(image, 0, 255,
+                                         cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
+        else:
+            binary_img = image.copy()
+
+        num_labels, labels, stats, _ = cv.connectedComponentsWithStats(
+            binary_img, connectivity=8
+        )
+
+        output_img = np.zeros_like(binary_img)
+
+        for i in range(1, num_labels):
+            x = stats[i, cv.CC_STAT_LEFT]
+            y = stats[i, cv.CC_STAT_TOP]
+            w = stats[i, cv.CC_STAT_WIDTH]
+            h = stats[i, cv.CC_STAT_HEIGHT]
+            area = stats[i, cv.CC_STAT_AREA]
+
+            if area < min_area:
+                continue
+
+            if h < min_height:
+                continue
+
+            aspect_ratio = w / float(h)
+            if aspect_ratio > max_aspect_ratio:
+                continue
+
+            fill_ratio = area / float(w * h)
+            if fill_ratio < min_fill_ratio:
+                continue
+
+            output_img[labels == i] = 255  
+
+        return output_img
