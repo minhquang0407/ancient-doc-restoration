@@ -1,3 +1,5 @@
+import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -43,10 +45,6 @@ class DataAugmentor:
         # Tạo ma trận xác suất ngẫu nhiên
         probs = np.random.random(output.shape[:2])  # Chỉ cần shape HxW
 
-        # Nếu ảnh màu (3 kênh), ta cần mở rộng dimension của probs để mask áp dụng lên cả 3 kênh
-        if output.ndim == 3:
-            probs = np.expand_dims(probs, axis=-1)
-
         # Salt (Trắng)
         output[probs < (self.sp_prob * self.salt_ratio)] = 255
 
@@ -75,10 +73,6 @@ class DataAugmentor:
         # Chọn ngẫu nhiên 1 bên để làm tối
         is_upper = np.random.choice([True, False])
         shadow_mask = mask > 0 if is_upper else mask < 0
-
-        # Xử lý channel dimension cho ảnh màu
-        if image.ndim == 3:
-            shadow_mask = shadow_mask[:, :, np.newaxis]
 
         # Áp dụng bóng
         img_float = image.astype(np.float32)
@@ -151,31 +145,59 @@ class DataAugmentor:
         return output
 
 
-# --- Ví dụ sử dụng ---
 if __name__ == "__main__":
     # 1. Khởi tạo Augmentor
     aug = DataAugmentor(
         noise_std=30,
         sp_prob=0.1,
-        shadow_amount=0.4,  # Bóng khá đậm
+        shadow_amount=0.4,
         max_rotation_angle=20,
         cylinder_mag=15.0
     )
 
-    # 2. Tạo ảnh giả lập (100x100 pixels, 3 channels)
-    # Tạo ảnh caro để dễ nhìn thấy biến dạng
-    fake_img = np.zeros((200, 200, 3), dtype=np.uint8)
-    fake_img[::20, :] = 255  # Kẻ sọc ngang
-    fake_img[:, ::20] = 255  # Kẻ sọc dọc
 
+    img_path = 'anh_demo.png' # Đường dẫn trên Colab
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     # 3. Chạy thử các hàm
-    res_gauss = aug.add_noise_gaussian(fake_img)
-    res_sp = aug.add_noise_sp(fake_img)
-    res_shadow = aug.add_shadow(fake_img)
-    res_rot = aug.add_rotation(fake_img)
-    res_warp = aug.warp_cylinder(fake_img)
+    res_gauss = aug.add_noise_gaussian(img)
+    res_sp = aug.add_noise_sp(img)
+    res_shadow = aug.add_shadow(img)
+    res_rot = aug.add_rotation(img)
+    res_warp = aug.warp_cylinder(img)
+
+    plt.subplot(2, 3, 1) # (1 hàng, 3 cột, vị trí 1)
+    plt.imshow(img)
+    plt.title("Ảnh gốc (RGB)")
+    plt.axis('off')
+
+    plt.subplot(2, 3, 2)
+    plt.imshow(res_gauss) # cmap='gray' để hiện đúng chất xám
+    plt.title("Nhiễu Gauss")
+    plt.axis('off')
+
+
+    plt.subplot(2, 3, 3)
+    plt.imshow(res_sp)
+    plt.title("Nhiễu muối tiêu")
+    plt.axis('off')
+
+    plt.subplot(2, 3, 4)
+    plt.imshow(res_shadow)
+    plt.title("Bóng râm")
+    plt.axis('off')
+
+    plt.subplot(2, 3, 5)
+    plt.imshow(res_rot)
+    plt.title("Ảnh bị xoay")
+    plt.axis('off')
+
+    plt.subplot(2, 3, 6)
+    plt.imshow(res_warp)
+    plt.title("Ảnh bị cong")
+    plt.axis('off')
+    plt.show()
 
     print("Gaussian shape:", res_gauss.shape)
     print("Shadow shape:", res_shadow.shape)
     print("Rotation shape:", res_rot.shape)
-    # Nếu muốn xem ảnh, bạn có thể lưu ra file hoặc dùng matplotlib
