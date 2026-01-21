@@ -1,155 +1,167 @@
 import cv2
 import numpy as np
-from typing import List, Tuple, Optional
+import matplotlib.pyplot as plt
+from skimage.morphology import skeletonize
+from scipy.interpolate import Rbf
 
 
-class PageDewarper:
+def convert_mask_to_points(mask_path):
     """
-    Class xử lý làm phẳng tài liệu cong 3D (Dewarping).
-    Thực hiện logic Giai đoạn 2 của dự án.
+    Bước 1: Chuyển đổi Mask AI thành tập hợp các vùng điểm (contours).
+    Xử lý lỗi mask giá trị thấp (0-1) thành chuẩn (0-255).
     """
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise FileNotFoundError(f"Mask file not found: {mask_path}")
 
-    def __init__(self):
-        # Cấu hình kernel cho phép toán hình thái học (Morphology)
-        # Kernel chữ nhật dài (25x3) giúp nối các chữ cái trên cùng 1 dòng
-        # nhưng không làm dính các dòng trên/dưới lại với nhau.
-        self.morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3))
+    # Fix: Nếu mask là dạng class index (0-1), scale lên 255
+    if np.max(mask) <= 1:
+        mask = mask * 255
 
-    def get_text_lines(self, binary_image: np.ndarray) -> List[np.ndarray]:
-        """
-        Phát hiện các dòng văn bản trong ảnh nhị phân.
+    _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
 
-        Logic Kỹ thuật[cite: 119]:
-        1. Dilate: Làm dày chữ để nối thành dải băng (text blobs).
-        2. Contour: Tìm biên của các dải băng đó.
+    # Lấy tất cả các contour (đại diện cho các dòng chữ)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        Args:
-            binary_image: Ảnh đầu vào đã nhị phân hóa (đen trắng).
+    # Lọc bỏ nhiễu (các chấm quá nhỏ)
+    valid_contours = [c for c in contours if cv2.contourArea(c) > 50]
 
-        Returns:
-            List[np.ndarray]: Danh sách các contour hợp lệ đại diện cho dòng chữ.
-        """
-        # 1. Phép toán Dilate (Nở): Nối chữ rời rạc thành dòng liền mạch
-        dilated = cv2.dilate(binary_image, self.morph_kernel, iterations=1)
+    return binary, valid_contours
 
-        # 2. Tìm Contour (đường bao)
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 3. Lọc nhiễu: Chỉ lấy các khối có diện tích > 500 pixel
-        # Loại bỏ các dấu chấm, vết bẩn nhỏ không phải là dòng chữ
-        valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 500]
+def get_skeleton(binary_mask, contours):
+    """
+    Bước 2: 'get_skeleton'
+    Từ tập điểm các dòng -> Tìm xương sống (skeleton) và tính điểm điều khiển (src -> dst).
+    Bao gồm cả việc tạo khung bao ảo (virtual box) để neo 4 góc.
+    """
+    if not contours:
+        return None, None, None
 
-        return valid_contours
+    src_points = []
+    dst_points = []
 
-    def fit_polynomial(self, points: np.ndarray, degree: int = 3) -> np.poly1d:
-        """
-        Hồi quy đa thức để mô hình hóa đường cong dòng chữ.
+    # --- Phần A: Tạo điểm Neo (Anchors) từ khung bao ảo ---
+    # Gộp tất cả điểm lại để tìm hình chữ nhật bao quanh toàn bộ văn bản
+    all_points = np.vstack([c.reshape(-1, 2) for c in contours])
+    rect = cv2.minAreaRect(all_points)
+    box = np.int0(cv2.boxPoints(rect))
 
-        Logic Toán học[cite: 104]:
-        - Sử dụng phương pháp Bình phương tối thiểu (Least Squares).
-        - Tìm hệ số cho đa thức bậc 3: y = ax^3 + bx^2 + cx + d.
+    # Sắp xếp 4 góc: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+    def order_corners(pts):
+        res = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        res[0] = pts[np.argmin(s)]  # TL
+        res[2] = pts[np.argmax(s)]  # BR
+        diff = np.diff(pts, axis=1)
+        res[1] = pts[np.argmin(diff)]  # TR
+        res[3] = pts[np.argmax(diff)]  # BL
+        return res
 
-        Args:
-            points: Mảng tọa độ (x, y) của các điểm trên dòng chữ.
-            degree: Bậc của đa thức (mặc định là 3 cho đường cong chữ S).
+    src_corners = order_corners(box)
 
-        Returns:
-            np.poly1d: Hàm đa thức f(x) dùng để tính y từ x.
-        """
-        if len(points) == 0:
-            return None
+    # Tính kích thước ảnh phẳng đầu ra
+    (tl, tr, br, bl) = src_corners
+    width = max(int(np.linalg.norm(br - bl)), int(np.linalg.norm(tr - tl)))
+    height = max(int(np.linalg.norm(tr - br)), int(np.linalg.norm(tl - bl)))
 
-        x = points[:, 0]
-        y = points[:, 1]
+    dst_corners = np.array([
+        [0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]
+    ], dtype="float32")
 
-        # np.polyfit giải hệ phương trình Ax = b để tìm bộ hệ số tối ưu
-        coeffs = np.polyfit(x, y, degree)
+    # Thêm 4 góc và trung điểm cạnh vào list điểm điều khiển
+    for i in range(4):
+        src_points.append(src_corners[i])
+        dst_points.append(dst_corners[i])
+        # Thêm trung điểm cạnh
+        next_i = (i + 1) % 4
+        src_points.append((src_corners[i] + src_corners[next_i]) / 2)
+        dst_points.append((dst_corners[i] + dst_corners[next_i]) / 2)
 
-        # Tạo đối tượng hàm số để dễ dàng gọi f(x) sau này
-        poly_func = np.poly1d(coeffs)
+    M = cv2.getPerspectiveTransform(src_corners, dst_corners)
 
-        return poly_func
+    # --- Phần B: Lấy Skeleton từng dòng ---
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        roi = binary_mask[y:y + h, x:x + w]
 
-    def generate_mesh(self, image_shape: Tuple[int, int], top_poly: np.poly1d, bottom_poly: np.poly1d) -> Tuple[
-        np.ndarray, np.ndarray]:
-        """
-        Tạo lưới tọa độ biến đổi (Remap Map).
+        # Tạo skeleton (trục giữa dòng)
+        skeleton = skeletonize(roi // 255)
+        y_loc, x_loc = np.where(skeleton > 0)
 
-        Logic Kỹ thuật[cite: 107]:
-        - Tạo lưới đích (thẳng).
-        - Tính ngược vị trí tương ứng trên ảnh nguồn (cong) bằng nội suy.
+        if len(x_loc) < 10: continue
 
-        Args:
-            image_shape: Kích thước ảnh (cao, rộng).
-            top_poly: Hàm đa thức của dòng trên cùng.
-            bottom_poly: Hàm đa thức của dòng dưới cùng.
+        global_pts = np.column_stack((x_loc + x, y_loc + y))
 
-        Returns:
-            Tuple[map_x, map_y]: Hai ma trận dùng cho hàm cv2.remap.
-        """
-        h, w = image_shape[:2]
+        # Sampling (lấy mẫu điểm thưa ra để giảm tải)
+        indices = np.linspace(0, len(global_pts) - 1, min(8, len(global_pts)), dtype=int)
+        sampled = global_pts[indices]
 
-        # Map X: Tọa độ x không đổi theo chiều dọc (vì ta chỉ nắn chỉnh chiều y là chủ yếu)
-        # np.tile nhân bản dòng 0..w cho đủ h dòng
-        map_x = np.tile(np.arange(w), (h, 1)).astype(np.float32)
+        # Map sang hệ tọa độ phẳng để tính Y đích
+        pts_array = np.array([sampled], dtype='float32')
+        mapped = cv2.perspectiveTransform(pts_array, M)[0]
+        avg_y = np.mean(mapped[:, 1])
 
-        # Map Y: Cần tính toán nội suy
-        map_y = np.zeros((h, w), dtype=np.float32)
+        for i, pt_src in enumerate(sampled):
+            src_points.append(pt_src)
+            dst_points.append([mapped[i][0], avg_y])  # Ép thẳng hàng
 
-        # Tính giá trị y của biên trên và biên dưới tại mọi điểm x
-        x_range = np.arange(w)
-        top_y_curve = top_poly(x_range)  # y_top
-        bottom_y_curve = bottom_poly(x_range)  # y_bottom
+    return np.array(src_points), np.array(dst_points), (width, height)
 
-        # Duyệt qua từng dòng y của ảnh đích (ảnh phẳng)
-        for y in range(h):
-            # Alpha: Tỷ lệ vị trí tương đối (0.0 ở đỉnh, 1.0 ở đáy)
-            alpha = y / h
 
-            # Công thức nội suy tuyến tính:
-            # y_nguồn = y_top + alpha * (khoảng cách giữa top và bottom)
-            map_y[y, :] = top_y_curve + alpha * (bottom_y_curve - top_y_curve)
+def tpa_dewarp(img_path, src_points, dst_points, out_size):
+    """
+    Bước 3: TPA (Text Point Alignment / TPS Warping)
+    Biến đổi ảnh gốc dựa trên các điểm kiểm soát.
+    """
+    img = cv2.imread(img_path)
+    if img is None:
+        raise FileNotFoundError(f"Image not found: {img_path}")
 
-        return map_x, map_y
+    try:
+        # Sử dụng Thin Plate Spline
+        tps_x = Rbf(dst_points[:, 0], dst_points[:, 1], src_points[:, 0], function='thin_plate', smooth=0.5)
+        tps_y = Rbf(dst_points[:, 0], dst_points[:, 1], src_points[:, 1], function='thin_plate', smooth=0.5)
 
-    def dewarp(self, image: np.ndarray) -> np.ndarray:
-        """
-        Hàm chính thực hiện quy trình làm phẳng ảnh (Pipeline).
-        """
-        h, w = image.shape[:2]
+        grid_y, grid_x = np.mgrid[0:out_size[1], 0:out_size[0]]
 
-        # B1: Tiền xử lý (Preprocessing)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # Dùng Otsu để tự động tìm ngưỡng tối ưu tách nền/chữ
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        map_x = tps_x(grid_x, grid_y).astype(np.float32)
+        map_y = tps_y(grid_x, grid_y).astype(np.float32)
 
-        # B2: Lấy các dòng văn bản (Text Line Detection)
-        contours = self.get_text_lines(binary)
+        return cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
-        if not contours:
-            print("Cảnh báo: Không tìm thấy dòng văn bản nào để làm phẳng.")
-            return image
+    except Exception as e:
+        print(f"TPA Error: {e}")
+        return img
 
-        # B3: Tìm Keylines (Dòng đầu và dòng cuối)
-        # Sắp xếp contour theo trục y (từ trên xuống dưới)
-        contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
 
-        top_cnt = contours[0]  # Dòng trên cùng
-        bottom_cnt = contours[-1]  # Dòng dưới cùng
+# Main Flow theo đúng yêu cầu
+if __name__ == "__main__":
+    mask_file = '1_19_4-ec_Page_244-qut0001_mask.png'
+    real_file = '1_19_4-ec_Page_244-qut0001.png'
 
-        # Reshape contour (N, 1, 2) -> (N, 2) để đưa vào hàm fit
-        top_points = top_cnt.reshape(-1, 2)
-        bottom_points = bottom_cnt.reshape(-1, 2)
+    print("Running Dewarping Pipeline...")
 
-        # B4: Mô hình hóa đường cong (Polynomial Regression)
-        top_poly = self.fit_polynomial(top_points)
-        bottom_poly = self.fit_polynomial(bottom_points)
+    # 1. Mask -> Points
+    binary, contours = convert_mask_to_points(mask_file)
 
-        # B5: Tạo lưới biến đổi (Mesh Generation)
-        map_x, map_y = self.generate_mesh((h, w), top_poly, bottom_poly)
+    # 2. Points -> Skeleton
+    src, dst, size = get_skeleton(binary, contours)
 
-        # B6: Kéo phẳng ảnh (Remapping)
-        # Dùng INTER_LINEAR (Bilinear Interpolation) để ảnh mượt, không vỡ hạt
-        dewarped_image = cv2.remap(image, map_x, map_y, cv2.INTER_LINEAR)
+    if src is not None and len(src) > 0:
+        # 3. Skeleton -> TPA
+        result = tpa_dewarp(real_file, src, dst, size)
 
-        return dewarped_image
+        # Hiển thị
+        plt.figure(figsize=(10, 5))
+        plt.subplot(1, 2, 1)
+        plt.imshow(cv2.cvtColor(cv2.imread(real_file), cv2.COLOR_BGR2RGB))
+        plt.scatter(src[:, 0], src[:, 1], c='r', s=1)
+        plt.title("Detected Skeleton & Anchors")
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
+        plt.title("Final Dewarped Result")
+        plt.show()
+    else:
+        print("Failed: No text lines detected.")
