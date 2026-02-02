@@ -1,3 +1,10 @@
+# src/pipeline.py (Updated)
+
+import time
+import cv2
+import numpy as np
+
+# Import các core modules
 from src.core.preprocessor import Preprocessor
 from src.core.denoiser import ImageDenoiser
 from src.core.enhancer import ImageEnhancer
@@ -5,106 +12,135 @@ from src.core.geometry import GeometryCorrector
 from src.core.dewarp import PageDewarper
 from src.core.segmentor import DocumentSegmentor
 from src.core.layout import LayoutAnalyzer
+from src.core.deskewer import Deskewer
+from src.core.ai_model import TinyUNet
+from src.core.mask_extractor import MaskExtractor
 
+# Giả sử bạn lưu class SmartRouter ở src/core/router.py
+# from src.core.router import SmartRouter 
 
 class DocumentRestorationPipeline:
     def __init__(self):
-        # Khởi tạo các worker
         self.prep = Preprocessor()
         self.denoiser = ImageDenoiser()
         self.geo = GeometryCorrector()
-        self.dewarp = PageDewarper()
+        self.dewarper = PageDewarper()
+        self.deskewer = Deskewer()
         self.enhancer = ImageEnhancer()
+        self.forensic = ForensicInk()  # Module ZCA
         self.seg = DocumentSegmentor()
         self.layout = LayoutAnalyzer()
 
+        # Khởi tạo Router (Dùng class mới hoặc hàm cũ đều được)
+        # self.router = SmartRouter() 
 
     def run(self, image, params={}):
-        """Chạy luồng xử lý chính cho 1 ảnh tài liệu
-        Trả về dict chứa ảnh/intermediate results và các metadata (sizes, times)
-        params: dict (tùy chỉnh ngưỡng/bật tắt các bước)"""
-        import time
-        if params is None:
-            params = {}
         results = {"meta": {}, "images": {}}
         t0 = time.time()
 
+        # Mặc định param
+        if params is None: params = {}
+
         try:
+            # ----------------------------------------
+            # BƯỚC 1: GEOMETRY CORRECTION (Trên ảnh gốc)
+            # ----------------------------------------
+            current_img = image.copy()
 
-            # ------ 1. Preprocess ------
-            img = self.prep.to_grayscale(image, 
-                                          assume_rgb=params.get("assume_rgb", True))
-            results["images"]["gray"] = img
-
+            # 1.1 Resize nếu ảnh quá lớn để xử lý nhanh (tùy chọn)
             if params.get("resize_max"):
-                img = self.prep.resize(img, max_size=params["resize_max"])
-                results["images"]["gray_resized"] = img
+                current_img = self.prep.resize_image(current_img, target_width=params["resize_max"][0])
 
-            if params.get("equalize", True):
-                img = self.prep.equalize_histogram(img)
-                results["images"]["hist_equalized"] = img
-            results["meta"]["t_preprocess"] = time.time() - t0
-
-            # 2. ------ Geometry correction (Deskew -> Dewarp) ------
-            t_geo = time.time()
+            # 1.2 Deskew (Xoay thẳng)
             if params.get("deskew", True):
-                img = self.geo.deskew(img)
-                results["images"]["deskewed"] = img
+                current_img = self.deskewer.deskew(current_img)
+                results["images"]["deskewed"] = current_img
 
+            # 1.3 Dewarp (Nắn cong) - Bước này quan trọng nhất
             if params.get("dewarp", True):
-                img = self.dewarp.dewarp_page(img,
-                                            method=params.get("dewarp_method", "mesh"))
-                results["images"]["dewarped"] = img
-            results["meta"]["t_geometry"] = time.time() - t_geo
+                # Lưu ý: Dewarp thường cần ảnh Gray để detect dòng, nhưng warp trên ảnh màu
+                # Hàm dewarp của bạn nên hỗ trợ trả về ảnh màu
+                current_img = self.dewarper.dewarp(current_img)
+                results["images"]["dewarped"] = current_img
 
-            # 3. ------ Restore (Denoise -> Shadow) ------
-            t_den = time.time()
+            # ----------------------------------------
+            # BƯỚC 2: SMART ROUTING (Phân loại Ca)
+            # ----------------------------------------
+            # Nếu chưa có class SmartRouter, dùng hàm analyze_and_route cũ của bạn
+            # mode = self.router.analyze(current_img)["mode"]
 
-            if params.get("denoise", True):
-                img = self.denoiser.denoise(img,
-                                            method=params.get("denoise_method", "median"),
-                                            strength=params.get("denoise_strength", 1.0))
-                results["images"]["denoised"] = img
+            # Tạm dùng logic đơn giản từ detector.py của bạn:
+            from src.core.detector import analyze_and_route
+            mode = analyze_and_route(current_img)
 
-            if params.get("inpaint", False):
-                img = self.denoiser.inpaint_holes(img,
-                                                  mask=params.get("inpaint_mask", None))
-                results["images"]["inpainted"] = img
+            # Cho phép ghi đè mode từ params
+            if params.get("force_mode"):
+                mode = params["force_mode"]
 
-            # Shadow removal after denoise
-            if params.get("remove_shadows", True):
-                img = self.enhancer.remove_shadows(img)
-                results["images"]["no_shadows"] = img
-            results["meta"]["t_restore"] = time.time() - t_den
+            results["meta"]["mode"] = mode
 
-            # 4. Enhance & Digitize
-            t_en = time.time()
+            # ----------------------------------------
+            # BƯỚC 3: RESTORATION & ENHANCEMENT
+            # ----------------------------------------
+            if mode == 'zca':
+                # --- NHÁNH KHÓ (ZCA) ---
+                print(">>> Executing ZCA Pipeline...")
 
-            if params.get("enhance_constrast", True):
-                img = self.enhancer.enhance_constrast(img,
-                                                    clip_limit=params.get("clip_limit", 2.0))
-                results["images"]["enhanced"] = img
+                # 1. Decorrelation Stretch & Mask Extraction
+                # forensic.process trả về raw_mask (đen trắng)
+                processed_mask = self.forensic.process(current_img)
 
-            if params.get("binarize", True):
-                binary = self.prep.adaptive_threshold(img,
-                                                   block_size=params.get("block_size", 35),
-                                                   C=params.get("threshold_C", 10))
-                results["images"]["binary"] = binary
-                final_img = binary
+                # 2. Refine Mask (Khử nhiễu trên mask)
+                cleaned_img = self.denoiser.clean_binary_noise(processed_mask, min_area=20)
+
+                # ZCA trả về ảnh nhị phân nền đen chữ trắng, ta đảo lại cho giống tài liệu
+                # Hoặc giữ nguyên tùy nhu cầu. Ở đây giả sử cần nền trắng chữ đen:
+                final_img = cv2.bitwise_not(cleaned_img)
+
             else:
-                final_img = img
+                # --- NHÁNH DỄ (DIVISION NORM) ---
+                print(">>> Executing Standard Pipeline...")
 
-            segments = self.seg.segment(final_img,
-                                        min_area=params.get("seg_min_area", 500))
-            results["images"]["segments"] = segments
-            results["meta"]["layout"] = self.layout.analyze(segments,
-                                                            image_shape=final_img.shape)
+                # 1. Chuyển xám (nếu chưa)
+                if len(current_img.shape) == 3:
+                    gray_img = cv2.cvtColor(current_img, cv2.COLOR_BGR2GRAY)
+                else:
+                    gray_img = current_img
+
+                # 2. Khử nhiễu (Denoise)
+                if params.get("denoise", True):
+                    gray_img = self.denoiser.manual_median_filter(gray_img, ksize=3)
+
+                # 3. Khử bóng (Shadow Removal) - Quan trọng!
+                no_shadow = self.enhancer.remove_shadow(gray_img)
+                results["images"]["no_shadow"] = no_shadow
+
+                # 4. Tăng tương phản (CLAHE)
+                enhanced = self.enhancer.apply_clahe(no_shadow, clip_limit=2.0)
+
+                # 5. Nhị phân hóa (Binarization) - Sauvola hoặc Otsu
+                # (Ở đây dùng Adaptive cho an toàn)
+                final_img = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                                  cv2.THRESH_BINARY, 31, 10)
+
+            results["images"]["enhanced"] = final_img
+
+            # ----------------------------------------
+            # BƯỚC 4: FINAL REFINEMENT (Chung cho cả 2 nhánh)
+            # ----------------------------------------
+
+            # Segmentation (Cắt dòng/chữ) nếu cần
+            # segments = self.seg.segment(final_img)
+            # results["images"]["segments"] = segments
+
             results["images"]["final"] = final_img
             results["meta"]["total_time"] = time.time() - t0
             results["status"] = "ok"
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             results["status"] = "error"
             results["error"] = str(e)
 
-        return results  # Trả về dict chứa các ảnh ở từng bước
+        return results
