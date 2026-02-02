@@ -107,3 +107,80 @@ class GeometryCorrector:
 
         return warped
 
+    def find_document_corners(self, image):
+        """
+        Tìm 4 góc của tờ giấy trong ảnh.
+        """
+        # 1. Tiền xử lý: Canny + Dilate
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blur, 75, 200)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=2)
+        # 2. Tìm contours
+        cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]  # Lấy 5 contour to nhất
+
+        screenCnt = None
+        # 3. Lặp qua các contour để tìm hình tứ giác (4 cạnh)
+        for c in cnts:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+            # Nếu contour có 4 điểm -> Khả năng cao là tờ giấy
+            if len(approx) == 4:
+                screenCnt = approx
+                break
+
+        if screenCnt is None:
+            print("   [Geometry] Không tìm thấy tờ giấy nào rõ ràng!")
+            return None
+
+
+        return screenCnt.reshape(4, 2)
+
+    def find_document_corners_with_morphological(self, image):
+        """
+        Tìm 4 góc của tờ giấy (Phiên bản nâng cấp Robust).
+        """
+        # 1. Resize ảnh để xử lý nhanh hơn và giảm nhiễu chi tiết thừa
+        # Chỉ dùng để detect, khi warp thì dùng ảnh gốc
+        scale_ratio = image.shape[0] / 500.0
+        h_new = 500
+        w_new = int(image.shape[1] / scale_ratio)
+        small_image = cv2.resize(image, (w_new, h_new))
+
+        # 2. Tiền xử lý: Gray -> Blur -> Canny
+        gray = cv2.cvtColor(small_image, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blur, 75, 200)
+
+        # [NEW] 3. Morphological Closing: Hàn gắn biên đứt gãy
+        # Giúp đường biên tờ giấy liền mạch hơn, dễ detect hơn
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # 4. Tìm contours
+        cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
+
+        screenCnt = None
+        for c in cnts:
+            peri = cv2.arcLength(c, True)
+            # Xấp xỉ đa giác
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+            # Nếu có 4 điểm
+            if len(approx) == 4:
+                screenCnt = approx
+                break
+
+        if screenCnt is None:
+            # Fallback: Nếu không tìm thấy, trả về 4 góc của ảnh (coi như không crop)
+            # Để tránh crash app
+            print("   [Geometry] Cảnh báo: Không bắt được góc, lấy toàn bộ ảnh.")
+            h, w = image.shape[:2]
+            return np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]])
+
+        # 5. Scale lại toạ độ về kích thước ảnh gốc
+        return screenCnt.reshape(4, 2) * scale_ratio

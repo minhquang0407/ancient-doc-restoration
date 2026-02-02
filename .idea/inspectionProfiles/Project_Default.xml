@@ -1,0 +1,20 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="pandas" />
+          <option value="pyvis" />
+          <option value="sparqlwrapper" />
+          <option value="pytorch" />
+          <option value="pytorch_geometric" />
+          <option value="streamlit" />
+          <option value="thefuzz" />
+          <option value="python-Levenshtein" />
+          <option value="unidecode" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
