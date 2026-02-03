@@ -125,5 +125,12 @@ We evaluate the quality of the restoration by measuring the accuracy of text ext
 
 By constraining Deep Learning to structural detection and relying on classical mathematics for image transformation, this project provides a robust, low-cost, and transparent solution for document restoration. This hybrid approach ensures that the historical "truth" of the document is preserved without the artifacts typically introduced by purely generative AI.
 
+## 7. Credits
+* Developed by:
+* **Nguyen Minh Quang** - University of Science, VNU. https://github.com/minhquang0407
+* **Dinh Nhat Tan** - University of Science, VNU. https://github.com/Hecquyn175
+* **Nguyen Quoc Anh Quan** - University of Science, VNU. https://github.com/nqaq2005 
+* **Le Nguyen Bao Thi** - University of Science, VNU. https://github.com/Wis2411
 ---
+
 
